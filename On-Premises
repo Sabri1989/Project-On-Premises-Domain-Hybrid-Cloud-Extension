@@ -1,0 +1,255 @@
+📁 Project: On-Premises Domain Environment + Hybrid Cloud Extension
+🖥️ Part 1 – On-Premises Infrastructure (rev.local)
+1. 🧠 Domain Controller (PDC) Setup
+Setting	Value
+🖧 Server name	PDC
+🌐 IP address	192.168.0.2/24
+⚙️ Roles	AD DS + DNS
+🏷️ Domain	rev.local
+
+
+2. 📂 Organisational Units (OUs), Users, and Groups
+OU	👤 Sample Users	🔒 Security Group
+HR	hr_user1, hr_manager	HR-Group
+Sales	sales_user1, sales_manager	Sales-Group
+💻 PowerShell Automation
+powershell
+# Create OUs
+New-ADOrganizationalUnit -Name "HR" -Path "DC=rev,DC=local"
+New-ADOrganizationalUnit -Name "Sales" -Path "DC=rev,DC=local"
+
+# Create HR users
+New-ADUser -Name "hr_user1" -GivenName "HR" -Surname "User1" `
+    -SamAccountName hr_user1 -UserPrincipalName hr_user1@rev.local `
+    -Path "OU=HR,DC=rev,DC=local" `
+    -AccountPassword (ConvertTo-SecureString "P@ssw0rd" -AsPlainText -Force) `
+    -Enabled $true
+
+New-ADUser -Name "hr_manager" -GivenName "HR" -Surname "Manager" `
+    -SamAccountName hr_manager -UserPrincipalName hr_manager@rev.local `
+    -Path "OU=HR,DC=rev,DC=local" `
+    -AccountPassword (ConvertTo-SecureString "P@ssw0rd" -AsPlainText -Force) `
+    -Enabled $true
+
+# Create HR group and add members
+New-ADGroup -Name "HR-Group" -GroupScope Global -Path "OU=HR,DC=rev,DC=local"
+Add-ADGroupMember -Identity "HR-Group" -Members "hr_user1", "hr_manager"
+
+# Repeat for Sales
+New-ADUser -Name "sales_user1" -GivenName "Sales" -Surname "User1" `
+    -SamAccountName sales_user1 -UserPrincipalName sales_user1@rev.local `
+    -Path "OU=Sales,DC=rev,DC=local" `
+    -AccountPassword (ConvertTo-SecureString "P@ssw0rd" -AsPlainText -Force) `
+    -Enabled $true
+
+New-ADGroup -Name "Sales-Group" -GroupScope Global -Path "OU=Sales,DC=rev,DC=local"
+Add-ADGroupMember -Identity "Sales-Group" -Members "sales_user1", "sales_manager"
+
+
+
+3. 🔧 Add IT-Group as Local Administrator via GPO
+➕ Create a global group: IT-Group
+📝 Create a GPO named Add IT-Group to Local Admins
+🧭 Navigate to:
+Computer Configuration → Preferences → Control Panel Settings → Local Users and Groups
+⚙️ Create new entry:
+Action: Update
+Group: Administrators (built-in)
+Members: rev\IT-Group
+
+
+
+4. 👤 Add a Local Administrator User for All PCs (GPO + Batch File)
+📄 Batch file (AddLocalAdmin.bat):
+batch
+net user localadmin P@ssw0rd! /add
+net localgroup administrators localadmin /add
+📌 Deployment steps:
+📁 Place batch file in:
+\\rev.local\SYSVOL\rev.local\scripts
+📝 Create a GPO named Add Local Admin
+🧭 Navigate to:
+Computer Configuration → Windows Settings → Scripts (Startup)
+➕ Add AddLocalAdmin.bat as a startup script
+
+
+
+5. 🚫 Disable Command Prompt & Control Panel for HR and Sales (Excluding Managers)
+📋 GPO: Restrict HR_Sales
+🔗 Linked to: OU=HR and OU=Sales
+
+🙅 Exclude managers via Security Filtering:
+
+In Delegation → Advanced → Add HR-Manager and Sales-Manager
+
+❌ Deny → Apply Group Policy
+
+⚙️ Settings:
+
+Path	Setting
+User Configuration → Policies → Administrative Templates → System	Prevent access to command prompt → Enabled
+Same path	Prohibit access to Control Panel and PC settings → Enabled
+
+
+
+6. 💾 Disable External Storage for HR Users (Except HR Manager)
+📋 GPO: Restrict HR USB
+🔗 Linked to: OU=HR
+🙅 Exclude: hr_manager (Deny Apply Group Policy)
+
+⚙️ Setting:
+
+text
+Computer Configuration → Policies → Administrative Templates → System → Removable Storage Access
+→ All Removable Storage classes: Deny all access → Enabled
+
+
+7. 🔐 Password Policy & Account Lockout
+📋 GPO: Default Domain Policy (or custom Password-Lockout-Policy)
+
+🔑 Password Policy (Computer Configuration → Policies → Windows Settings → Security Settings → Account Policies → Password Policy):
+
+Setting	Value
+⏰ Maximum password age	90 days
+🔢 Minimum password length	4
+✅ Password must meet complexity requirements	Enabled
+📜 Enforce password history	2 passwords remembered
+🔒 Account Lockout Policy:
+
+Setting	Value
+🚫 Account lockout threshold	5 invalid attempts
+⏱️ Reset account lockout counter after	90 minutes
+⏲️ Account lockout duration	90 minutes
+
+
+8. 🌐 Create a Desktop Shortcut (URL) for HR Users – hrapp.rev.local
+🌍 DNS Record:
+hrapp.rev.local → 192.168.0.10
+
+📋 GPO (linked to OU=HR):
+
+User Configuration → Preferences → Windows Settings → Shortcuts
+
+Action: Create
+
+📍 Location: %Desktop%\HR App.url
+
+🔗 Target URL: http://hrapp.rev.local
+
+
+
+9. 📡 DHCP Server
+Setting	Value
+📍 Scope	192.168.0.40 – 192.168.0.230 /24
+🚫 Exclusions	192.168.0.80 – 192.168.0.85
+📌 Reservation	192.168.0.200 for specific Windows client (by MAC)
+
+
+
+10. ⚖️ DNS Load Balancing for www.rev.local
+Create an A record named www.rev.local with two IP addresses:
+192.168.0.8
+192.168.0.9
+🔄 DNS Server returns them in round-robin fashion automatically.
+
+
+11. 💿 Map Drive P:\ (Public) for All Users
+📋 GPO: Map Public Drive (linked to domain root)
+⚙️ Settings:
+User Configuration → Preferences → Drive Maps
+Action: Create
+💾 Drive Letter: P:
+📂 Location: \\rev.local\Public
+👥 Permissions: All users can create, edit, delete
+📊 Quota: 2 GB per user
+→ Implement using File Server Resource Manager (FSRM) on the file server.
+
+
+12. 📁 Map Drive H:\ (HR Department – Create/Edit, No Delete)
+📂 Share: \\rev.local\HR
+🔒 NTFS Permissions for HR-Group:
+Permission	✅ Allow	❌ Deny
+Create files / write data	✓	
+Create folders / append data	✓	
+Delete		✓
+Delete subfolders and files		✓
+🚫 File Screening (FSRM): Block extensions: .mp3, .mp4, .avi, .exe, .msi
+
+
+
+13. 🏠 Home Folders for HR and Sales Users
+📂 Path: \\rev.local\Home\%UserName% mapped to H:\
+💻 PowerShell Automation
+powershell
+# HR Users
+$hrUsers = Get-ADUser -Filter * -SearchBase "OU=HR,DC=rev,DC=local"
+foreach ($user in $hrUsers) {
+    $homePath = "\\rev.local\Home\" + $user.SamAccountName
+    New-Item -Path $homePath -ItemType Directory -Force
+    Set-ADUser $user -HomeDrive "H:" -HomeDirectory $homePath
+}
+
+# Sales Users
+$salesUsers = Get-ADUser -Filter * -SearchBase "OU=Sales,DC=rev,DC=local"
+foreach ($user in $salesUsers) {
+    $homePath = "\\rev.local\Home\" + $user.SamAccountName
+    New-Item -Path $homePath -ItemType Directory -Force
+    Set-ADUser $user -HomeDrive "H:" -HomeDirectory $homePath
+}
+
+
+
+
+14. 🖥️ Deploy Windows 10 using WDS
+📦 Install Windows Deployment Services role
+💿 Add Windows 10 image (install.wim)
+⚙️ Configure DHCP options for PXE boot:
+Option	Value
+60	PXEClient
+66	Boot server IP (e.g., 192.168.0.3)
+67	boot\x64\wdsnbp.com  
+
+
+
+
+15. 🖨️ HR Printer (Black & White, Available 8:00 AM – 4:00 PM)
+🖨️ Printer name: HR-Printer
+🖧 Print Server: (any member server with Print Services)
+⏰ Availability schedule (via Print Management):
+🟢 Available from: 8:00 AM
+🔴 Available until: 4:00 PM
+📋 GPO Deployment: Linked to OU=HR
+User Configuration → Preferences → Control Panel Settings → Printers → New Shared Printer → \\PrintServer\HR-Printer
+📊 Summary of GPOs Created
+📋 GPO Name	🔗 Linked OU	🎯 Purpose
+👨‍💻 Add IT-Group to Local Admins	Domain root	Add IT-Group to local Administrators
+👤 Add Local Admin	Domain root	Create localadmin user on all PCs
+🚫 Restrict HR_Sales	HR, Sales	Disable CMD & Control Panel (excl. managers)
+💾 Restrict HR USB	HR	Block removable storage (excl. HR manager)
+💿 Map Public Drive	Domain root	Map P:\ to \\rev.local\Public
+🖨️ HR Printer Deployment	HR	Deploy HR-Printer with time schedule
+🧩 Legend of Icons Used
+Icon	Meaning
+🖥️	Server / Computer
+📂	Folder / OU
+👤	User
+🔒	Security / Permissions
+💻	PowerShell / Script
+🔧	Configuration
+🚫	Restriction / Deny
+💾	USB / Storage
+🔐	Password / Security Policy
+🌐	DNS / URL
+📡	DHCP
+⚖️	Load Balancing
+💿	Drive Map
+📁	Shared Folder
+🏠	Home Folder
+🖨️	Printer
+📊	Summary
+✅	Allow
+❌	Deny
+➕	Add / Create
+🔗	Link
+Would you like me to also create Part 2 – Hybrid Cloud Extension with the same icon style? ☁️🔗
+
